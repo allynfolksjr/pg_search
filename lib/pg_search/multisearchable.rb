@@ -28,5 +28,7 @@ module PgSearch
         pg_search_document.destroy if pg_search_document
       end
     end
+
+    handle_asynchronously :update_pg_search_document
   end
 end
