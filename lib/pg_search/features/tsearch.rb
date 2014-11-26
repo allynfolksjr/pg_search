@@ -1,3 +1,4 @@
+require "pg_search/compatibility"
 require "active_support/core_ext/module/delegation"
 
 module PgSearch
@@ -27,17 +28,22 @@ module PgSearch
 
       DISALLOWED_TSQUERY_CHARACTERS = /['?\\:]/
 
-      def tsquery_for_term(term)
-        sanitized_term = term.gsub(DISALLOWED_TSQUERY_CHARACTERS, " ")
+      def tsquery_for_term(unsanitized_term)
+        sanitized_term = unsanitized_term.gsub(DISALLOWED_TSQUERY_CHARACTERS, " ")
 
         term_sql = Arel.sql(normalize(connection.quote(sanitized_term)))
 
         # After this, the SQL expression evaluates to a string containing the term surrounded by single-quotes.
         # If :prefix is true, then the term will also have :* appended to the end.
-        terms = ["' ", term_sql, " '", (':*' if options[:prefix])].compact
+        terms = [
+          Compatibility.build_quoted("' "),
+          term_sql,
+          Compatibility.build_quoted(" '"),
+          (Compatibility.build_quoted(":*") if options[:prefix])
+        ].compact
 
         tsquery_sql = terms.inject do |memo, term|
-          Arel::Nodes::InfixOperation.new("||", memo, term)
+          Arel::Nodes::InfixOperation.new("||", memo, Compatibility.build_quoted(term))
         end
 
         Arel::Nodes::NamedFunction.new(
@@ -54,25 +60,8 @@ module PgSearch
       end
 
       def tsdocument
-        tsdocument_terms = []
-
-        columns_to_use = options[:tsvector_column] ?
-                           columns.select { |c| c.is_a?(PgSearch::Configuration::ForeignColumn) } :
-                           columns
-
-        if columns_to_use.present?
-          tsdocument_terms << columns_to_use.map do |search_column|
-            tsvector = Arel::Nodes::NamedFunction.new(
-              "to_tsvector",
-              [dictionary, Arel.sql(normalize(search_column.to_sql))]
-            ).to_sql
-
-            if search_column.weight.nil?
-              tsvector
-            else
-              "setweight(#{tsvector}, #{connection.quote(search_column.weight)})"
-            end
-          end.join(" || ")
+        tsdocument_terms = (columns_to_use || []).map do |search_column|
+          column_to_tsvector(search_column)
         end
 
         if options[:tsvector_column]
@@ -101,11 +90,32 @@ module PgSearch
       end
 
       def dictionary
-        options[:dictionary] || :simple
+        Compatibility.build_quoted(options[:dictionary] || :simple)
       end
 
       def arel_wrap(sql_string)
         Arel::Nodes::Grouping.new(Arel.sql(sql_string))
+      end
+
+      def columns_to_use
+        if options[:tsvector_column]
+          columns.select { |c| c.is_a?(PgSearch::Configuration::ForeignColumn) }
+        else
+          columns
+        end
+      end
+
+      def column_to_tsvector(search_column)
+        tsvector = Arel::Nodes::NamedFunction.new(
+          "to_tsvector",
+          [dictionary, Arel.sql(normalize(search_column.to_sql))]
+        ).to_sql
+
+        if search_column.weight.nil?
+          tsvector
+        else
+          "setweight(#{tsvector}, #{connection.quote(search_column.weight)})"
+        end
       end
     end
   end
