@@ -29,6 +29,6 @@ module PgSearch
       end
     end
 
-    handle_asynchronously :update_pg_search_document
+    handle_asynchronously :update_pg_search_document, :priority => 5
   end
 end
